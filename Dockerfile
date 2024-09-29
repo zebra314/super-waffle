@@ -62,6 +62,16 @@ RUN apt-get install -y ros-noetic-map-server
 RUN apt-get install -y ros-noetic-moveit
 RUN apt-get install -y ros-noetic-costmap-2d
 RUN apt-get install -y ros-noetic-four-wheel-steering-msgs
+RUN apt-get install -y ros-noetic-urdf-geometry-parser
+RUN apt-get install -y ros-noetic-pcl-conversions
+RUN apt-get install -y ros-noetic-pcl-ros
+RUN apt-get install -y ros-noetic-tf-conversions
+RUN apt-get install -y ros-noetic-base-local-planner
+RUN apt-get install -y ros-noetic-people-msgs
+RUN apt-get install -y libdw-dev
+RUN apt-get install -y ros-noetic-move-base
+RUN apt-get install -y ros-noetic-robot-state-publisher
+RUN apt-get install -y ros-noetic-image-proc
 
 # # Install ROS dependencies using rosdep
 # # Take approximately 15 minutes
@@ -74,11 +84,10 @@ RUN apt-get install -y ros-noetic-four-wheel-steering-msgs
 # RUN rosdep install --from-paths /root/tiago_ws/src --ignore-src -r -y
 
 # Set workspace
-WORKDIR /root/taigo_ws
+WORKDIR /root/tiago_ws
 
 # Entry point
 COPY scripts/entrypoint.sh /root/scripts/entrypoint.sh
 RUN chmod +x /root/scripts/entrypoint.sh
 ENTRYPOINT ["/root/scripts/entrypoint.sh"]
-# CMD ["sh", "-c", "clear && exec zsh"]
-CMD ["sh", "-c", "exec zsh"]
+CMD ["sh", "-c", "clear && exec zsh"]
