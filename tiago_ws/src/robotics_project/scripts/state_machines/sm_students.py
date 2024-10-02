@@ -30,6 +30,9 @@ class StateMachine(object):
         # Access rosparams
         self.cmd_vel_top = rospy.get_param(rospy.get_name() + '/cmd_vel_topic')
         self.mv_head_srv_nm = rospy.get_param(rospy.get_name() + '/move_head_srv')
+        self.pick_srv_nm = rospy.get_param(rospy.get_name() + '/pick_srv')
+        self.place_srv_nm = rospy.get_param(rospy.get_name() + '/place_srv')
+        self.cube_pose = rospy.get_param(rospy.get_name() + '/cube_pose')
 
         # Subscribe to topics
 
@@ -55,37 +58,20 @@ class StateMachine(object):
 
     def check_states(self):
 
-        while not rospy.is_shutdown() and self.state != 4:
-            
-            # State 0: Move the robot "manually" to door
+        while not rospy.is_shutdown() and self.state != 2:
+
+            # State 0: Inspect surroundings
             if self.state == 0:
-                move_msg = Twist()
-                move_msg.linear.x = 1
-
-                rate = rospy.Rate(10)
-                converged = False
-                cnt = 0
-                rospy.loginfo("%s: Moving towards door", self.node_name)
-                while not rospy.is_shutdown() and cnt < 5:
-                    self.cmd_vel_pub.publish(move_msg)
-                    rate.sleep()
-                    cnt = cnt + 1
-
-                self.state = 1
-                rospy.sleep(1)
-
-            # State 1:  Tuck arm 
-            if self.state == 1:
-                rospy.loginfo("%s: Tucking the arm...", self.node_name)
+                rospy.loginfo("%s: Inspect_surroundings...", self.node_name)
                 goal = PlayMotionGoal()
-                goal.motion_name = 'home'
+                goal.motion_name = 'inspect_surroundings'
                 goal.skip_planning = True
                 self.play_motion_ac.send_goal(goal)
-                success_tucking = self.play_motion_ac.wait_for_result(rospy.Duration(100.0))
+                success_tucking = self.play_motion_ac.wait_for_result(rospy.Duration(200.0))
 
                 if success_tucking:
-                    rospy.loginfo("%s: Arm tuck: ", self.play_motion_ac.get_result())
-                    self.state = 2
+                    rospy.loginfo("%s: Inspect surroundings: ", self.play_motion_ac.get_result())
+                    self.state = 1
                 else:
                     self.play_motion_ac.cancel_goal()
                     rospy.logerr("%s: play_motion failed to tuck arm, reset simulation", self.node_name)
@@ -93,55 +79,68 @@ class StateMachine(object):
 
                 rospy.sleep(1)
 
-            # # State 2:  Move the robot "manually" to chair
-            if self.state == 2:
-                move_msg = Twist()
-                move_msg.angular.z = -1
-
-                rate = rospy.Rate(10)
-                converged = False
-                cnt = 0
-                rospy.loginfo("%s: Moving towards table", self.node_name)
-                while not rospy.is_shutdown() and cnt < 5:
-                    self.cmd_vel_pub.publish(move_msg)
-                    rate.sleep()
-                    cnt = cnt + 1
-
-                move_msg.linear.x = 1
-                move_msg.angular.z = 0
-                cnt = 0
-                while not rospy.is_shutdown() and cnt < 15:
-                    self.cmd_vel_pub.publish(move_msg)
-                    rate.sleep()
-                    cnt = cnt + 1
-
-                self.state = 3
-                rospy.sleep(1)
-
-            # State 3:  Lower robot head service
-            if self.state == 3:
+            # State 1: Pick service
+            if self.state == 1:
                 try:
-                    rospy.loginfo("%s: Lowering robot head", self.node_name)
-                    move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
-                    move_head_req = move_head_srv("down")
+                    rospy.loginfo("%s: Pick service", self.node_name)
+                    pickup_srv = rospy.ServiceProxy(self.pick_srv_nm, SetBool)
+                    move_head_req = pickup_srv()
                     
                     if move_head_req.success == True:
-                        self.state = 4
-                        rospy.loginfo("%s: Move head down succeded!", self.node_name)
+                        self.state = 2
+                        rospy.loginfo("%s: Pick up succeded!", self.node_name)
                     else:
-                        rospy.loginfo("%s: Move head down failed!", self.node_name)
+                        rospy.loginfo("%s: Pick up failed", self.node_name)
                         self.state = 5
 
                     rospy.sleep(3)
 
                 except rospy.ServiceException as e:
-                    print("Service call to move_head server failed: %s"%e)
-            
-            # State 4: Tuck arm
+                    print("Service call to pick up failed: %s"%e)
 
-            # State 5: Pick up the cube
+            # # State 2:  Move the robot "manually" to chair
+            # if self.state == 2:
+            #     move_msg = Twist()
+            #     move_msg.angular.z = -1
 
-            # State 6: 
+            #     rate = rospy.Rate(10)
+            #     converged = False
+            #     cnt = 0
+            #     rospy.loginfo("%s: Moving towards table", self.node_name)
+            #     while not rospy.is_shutdown() and cnt < 5:
+            #         self.cmd_vel_pub.publish(move_msg)
+            #         rate.sleep()
+            #         cnt = cnt + 1
+
+            #     move_msg.linear.x = 1
+            #     move_msg.angular.z = 0
+            #     cnt = 0
+            #     while not rospy.is_shutdown() and cnt < 15:
+            #         self.cmd_vel_pub.publish(move_msg)
+            #         rate.sleep()
+            #         cnt = cnt + 1
+
+            #     self.state = 3
+            #     rospy.sleep(1)
+
+            # # State 3:  Lower robot head service
+            # if self.state == 2:
+            #     try:
+            #         rospy.loginfo("%s: Lowering robot head", self.node_name)
+            #         move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
+            #         move_head_req = move_head_srv("down")
+                    
+            #         if move_head_req.success == True:
+            #             self.state = 4
+            #             rospy.loginfo("%s: Move head down succeded!", self.node_name)
+            #         else:
+            #             rospy.loginfo("%s: Move head down failed!", self.node_name)
+            #             self.state = 5
+
+            #         rospy.sleep(3)
+
+            #     except rospy.ServiceException as e:
+            #         print("Service call to move_head server failed: %s"%e)
 
             # Error handling
             if self.state == 5:
