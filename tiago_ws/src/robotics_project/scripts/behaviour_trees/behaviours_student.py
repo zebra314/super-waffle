@@ -183,3 +183,58 @@ class movehead(pt.behaviour.Behaviour):
         # if still trying
         else:
             return pt.common.Status.RUNNING
+
+class movecube(pt.behaviour.Behaviour):
+
+    """
+    Pick or place the cube.
+    Returns running whilst awaiting the result,
+    success if the action was succesful, and v.v..
+    """
+
+    def __init__(self, operation):
+
+        rospy.loginfo("Initialising move cube behaviour.")
+
+        # server
+        mv_cube_srv = '/' + operation + '_srv'
+        mv_cube_srv_nm = rospy.get_param(rospy.get_name() + mv_cube_srv)
+        self.move_cube_srv = rospy.ServiceProxy(mv_cube_srv_nm, SetBool)
+        rospy.wait_for_service(mv_cube_srv_nm, timeout=30)
+
+        # execution checker
+        self.tried = False
+        self.done = False
+
+        # become a behaviour
+        super(movecube, self).__init__("GET EM!")
+
+    def update(self):
+
+        # success if done
+        if self.done:
+            return pt.common.Status.SUCCESS
+
+        # try if not tried
+        elif not self.tried:
+
+            # command
+            self.move_cube_req = self.move_cube_srv()
+            self.tried = True
+
+            # tell the tree you're running
+            return pt.common.Status.RUNNING
+
+        # if succesful
+        elif self.move_cube_req.success:
+            self.done = True
+            return pt.common.Status.SUCCESS
+
+        # if failed
+        elif not self.move_cube_req.success:
+            return pt.common.Status.FAILURE
+
+        # if still trying
+        else:
+            return pt.common.Status.RUNNING
+
