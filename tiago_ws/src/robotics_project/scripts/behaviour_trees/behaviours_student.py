@@ -8,6 +8,7 @@ from geometry_msgs.msg import Twist
 from actionlib import SimpleActionClient
 from play_motion_msgs.msg import PlayMotionAction, PlayMotionGoal
 from robotics_project.srv import MoveHead, MoveHeadRequest, MoveHeadResponse
+from std_srvs.srv import Empty, SetBool, SetBoolRequest
 
 
 class counter(pt.behaviour.Behaviour):
@@ -235,6 +236,68 @@ class movecube(pt.behaviour.Behaviour):
             return pt.common.Status.FAILURE
 
         # if still trying
+        else:
+            return pt.common.Status.RUNNING
+
+class detectcube(pt.behaviour.Behaviour):
+
+    """
+    Sends a goal to the play motion action server.
+    Returns running whilst awaiting the result,
+    success if the action was succesful, and v.v..
+    """
+
+    def __init__(self):
+
+        rospy.loginfo("Initialising detect cube behaviour.")
+
+        # Set up action client
+        self.play_motion_ac = SimpleActionClient("/play_motion", PlayMotionAction)
+        if not self.play_motion_ac.wait_for_server(rospy.Duration(1000)):
+            rospy.logerr("%s: Could not connect to /play_motion action server")
+            exit()
+        rospy.loginfo("%s: Connected to play_motion action server")
+
+        # personal goal setting
+        self.goal = PlayMotionGoal()
+        self.goal.motion_name = 'inspect_surroundings' # Try to detect the cube from the surroundings
+        self.goal.skip_planning = True
+
+        # execution checker
+        self.sent_goal = False
+        self.finished = False
+
+        # become a behaviour
+        super(detectcube, self).__init__("Detect cube!")
+
+    def update(self):
+
+        # already tucked the arm
+        if self.finished: 
+            return pt.common.Status.SUCCESS
+        
+        # command to tuck arm if haven't already
+        elif not self.sent_goal:
+
+            # send the goal
+            self.play_motion_ac.send_goal(self.goal)
+            self.sent_goal = True
+
+            # tell the tree you're running
+            return pt.common.Status.RUNNING
+
+        # if I was succesful! :)))))))))
+        elif self.play_motion_ac.get_result():
+
+            # than I'm finished!
+            self.finished = True
+            return pt.common.Status.SUCCESS
+
+        # if failed
+        elif not self.play_motion_ac.get_result():
+            return pt.common.Status.FAILURE
+
+        # if I'm still trying :|
         else:
             return pt.common.Status.RUNNING
 
