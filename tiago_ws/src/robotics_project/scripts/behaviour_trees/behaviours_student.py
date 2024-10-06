@@ -630,16 +630,20 @@ class update_localization(pt.behaviour.Behaviour):
         rospy.loginfo("Localization succeeded in updating!")
         return pt.common.Status.RUNNING
 
-class navigate_to_pose(pt.behaviour.Behaviour):
+class sendgoal(pt.behaviour.Behaviour):
 
     """
     Sends a goal to the play motion action server.
     Returns running whilst awaiting the result,
     success if the action was succesful, and v.v..
+    
+    @param operation: The operation to perform (e.g., pick, place)
+    @param send_goal_once: If True, the goal is sent only once. If False, the goal is sent every time the behaviour is updated.
+                            in order to prevent the robot from replanning.
     """
 
-    def __init__(self, operation):
-        rospy.loginfo("Initializing navigating to " + operation + " pose.")
+    def __init__(self, operation, send_goal_once=True):
+        rospy.loginfo("Initializing send goal behaviour for " + operation + " operation!")
         
         # Set up action client
         self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
@@ -651,51 +655,45 @@ class navigate_to_pose(pt.behaviour.Behaviour):
         # Get the pose topic
         operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
         self.operation_pose = rospy.wait_for_message(operation_pose_top, PoseStamped, timeout=5)
-
-        print(self.operation_pose)
      
         # Get the goal from the pose topic
         self.goal = MoveBaseGoal()
         self.goal.target_pose = self.operation_pose
-        rospy.loginfo("Received navigation goal!")
+        rospy.loginfo("Received goal pose for " + operation + " operation!")
  
-        # execution checker
+        # Execution checker, Boolean to check the task status
+        self.sent_goal_once = send_goal_once
         self.sent_goal = False
         self.finished = False
 
-        # become a behaviour
-        super(navigate_to_pose, self).__init__("Navigate to " + operation + " pose!")
+        # Become a behaviour
+        super(sendgoal, self).__init__("Send goal to " + operation + " pose!")
 
     def update(self):
 
-        # already tucked the arm
-        if self.finished: 
+        # Already done the task
+        if self.finished:
+            if not self.sent_goal_once:
+                self.finished = False
             return pt.common.Status.SUCCESS
         
-        # command to tuck arm if haven't already
+        # Not sent the goal yet
         elif not self.sent_goal:
-
-            # send the goal
-            # Set the goal frame ID (e.g., map frame)
             self.goal.target_pose.header.frame_id = "map"
             self.goal.target_pose.header.stamp = rospy.Time.now()
             self.move_base_ac.send_goal(self.goal)
             self.sent_goal = True
-
-            # tell the tree you're running
             return pt.common.Status.RUNNING
 
-        # if I was succesful! :)))))))))
+        # Task is successful
         elif self.move_base_ac.get_result():
-
-            # than I'm finished!
             self.finished = True
             return pt.common.Status.SUCCESS
 
-        # if failed
+        # Failed
         elif not self.move_base_ac.get_result():
             return pt.common.Status.FAILURE
 
-        # if I'm still trying :|
+        # Already sent the goal and not yet received the result
         else:
             return pt.common.Status.RUNNING
