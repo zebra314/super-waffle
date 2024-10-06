@@ -44,7 +44,8 @@ RUN apt-get update && \
     apt-get install -y qtwayland5 && \
     apt-get install -yqq xserver-xorg && \
     apt-get install -y xwayland && \
-    apt-get install -y qt5-default
+    apt-get install -y qt5-default  && \
+    apt-get install -y libeigen3-dev
 
 # ---------------------------------------------------------------------------- #
 #                             ROS environment setup                            #
@@ -58,6 +59,10 @@ RUN apt-get install -y ros-noetic-gazebo-ros-pkgs
 RUN apt-get install -y ros-noetic-xacro 
 RUN apt-get install -y ros-noetic-amcl
 RUN apt-get install -y libopencv-dev
+RUN apt-get install -y python3-opencv
+RUN apt-get install -y ros-noetic-vision-opencv
+RUN apt-get install -y ros-noetic-cv-bridge
+RUN apt-get install -y ros-noetic-image-transport
 RUN apt-get install -y ros-noetic-map-server
 RUN apt-get install -y ros-noetic-moveit
 RUN apt-get install -y ros-noetic-costmap-2d
@@ -72,6 +77,10 @@ RUN apt-get install -y libdw-dev
 RUN apt-get install -y ros-noetic-move-base
 RUN apt-get install -y ros-noetic-robot-state-publisher
 RUN apt-get install -y ros-noetic-image-proc
+RUN apt-get install -y ros-noetic-py-trees
+RUN apt-get install -y ros-noetic-py-trees-ros
+RUN apt-get install -y ros-noetic-roslint
+RUN apt-get install -y ros-noetic-depthimage-to-laserscan
 
 # # Install ROS dependencies using rosdep
 # # Take approximately 15 minutes
@@ -82,6 +91,10 @@ RUN apt-get install -y ros-noetic-image-proc
 #     rosdep update
 # COPY ./tiago_ws /root/tiago_ws
 # RUN rosdep install --from-paths /root/tiago_ws/src --ignore-src -r -y
+
+# Clean up to reduce image size
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set workspace
 WORKDIR /root/tiago_ws

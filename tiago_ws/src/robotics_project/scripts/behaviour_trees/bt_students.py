@@ -9,29 +9,63 @@ class BehaviourTree(ptr.trees.BehaviourTree):
 	def __init__(self):
 
 		rospy.loginfo("Initialising behaviour tree")
+		# Task C:
+		# tuck the arm
+		# b0 = tuckarm()
 
+		# # detect the cube
+		# b1 = detectcube()
+
+		# # pick the cube
+		# b2 = movecube("pick")
+
+		# # go to table
+		# b3 = pt.composites.Selector(
+		# 	name="Go to table fallback",
+		# 	children=[counter(15, "At table?"), go("Go to table!", 0, -3)]
+		# )
+
+		# b4 = pt.composites.Selector(
+		# 	name="Go to table fallback",
+		# 	children=[counter(16, "At table?"), go("Go to table!", 0.5, 0)]
+		# )
+
+		# # place the cube on second table
+		# b5 = movecube("place")
+
+		# # Create sequence to execute if job is not done!
+		# sequence = RSequence(name="Job not done and Reset", children=[tuckarm(), wait(10, "Resetting!"), resetpose()])
+		
+		# # checks if cube is placed on table 2 and job is done
+		# b6 = pt.composites.Selector(
+		# 	name="Check if detected",
+		# 	children=[cube_detected_on_table2(), sequence]
+		# )
+
+		# # become the tree
+		# tree = RSequence(name="Main sequence", children=[b0, b1, b2, b3, b4, b5, b6])
+		# super(BehaviourTree, self).__init__(tree)
+
+		b0 = tuckarm()
+
+		b1 = pt.composites.Selector(
+			name="Perform localization",
+			children=[amcl_convergence_checker(), update_localization()]
+		) 
+
+		b2 = navigate_to_pose("pick")
+		
 		# detect the cube
-		b0 = detectcube()
+		b3 = detectcube()
 
 		# pick the cube
-		b1 = movecube("pick")
+		b4 = movecube("pick")
 
 		# go to table
-		b2 = pt.composites.Selector(
-			name="Go to table fallback",
-			children=[counter(14, "At table?"), go("Go to table!", 0, -3)]
-		)
+		b5 = navigate_to_pose("place")
 
-		b3 = pt.composites.Selector(
-			name="Go to table fallback",
-			children=[counter(18, "At table?"), go("Go to table!", 0.5, 0)]
-		)
 
-		# place the cube
-		b4 = movecube("place")
-
-		# become the tree
-		tree = RSequence(name="Main sequence", children=[b0, b1, b2, b3, b4])
+		tree = RSequence(name="Main sequence", children=[b1, b2, b3, b4, b5])
 		super(BehaviourTree, self).__init__(tree)
 
 		# execute the behaviour tree

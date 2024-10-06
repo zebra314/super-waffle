@@ -3,6 +3,9 @@ all: build run clean
 build:
 	docker build -t ros-noetic-zsh:latest .
 
+build-no-cache:
+	docker build --no-cache -t ros-noetic-zsh:latest .
+
 run:
 	xhost +local:root
 	-docker run -it \
