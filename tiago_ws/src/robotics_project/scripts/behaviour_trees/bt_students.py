@@ -51,21 +51,15 @@ class BehaviourTree(ptr.trees.BehaviourTree):
 		b1 = pt.composites.Selector(
 			name="Perform localization",
 			children=[amcl_convergence_checker(), update_localization()]
-		) 
+		)
 
 		b2 = navigate_to_pose("pick")
-		
-		# detect the cube
 		b3 = detectcube()
-
-		# pick the cube
 		b4 = movecube("pick")
-
-		# go to table
 		b5 = navigate_to_pose("place")
+		b6 = movecube("place")
 
-
-		tree = RSequence(name="Main sequence", children=[b1, b2, b3, b4, b5])
+		tree = RSequence(name="Main sequence", children=[b1, b2, b3, b4, b5, b6])
 		super(BehaviourTree, self).__init__(tree)
 
 		# execute the behaviour tree

@@ -114,7 +114,7 @@ class tuckarm(pt.behaviour.Behaviour):
 
         rospy.loginfo("Initialising tuck arm behaviour.")
 
-        # Set up action client
+        # Set up action client      
         self.play_motion_ac = SimpleActionClient("/play_motion", PlayMotionAction)
 
         # personal goal setting
@@ -558,7 +558,7 @@ class amcl_convergence_checker(pt.behaviour.Behaviour):
 
         self.particlecloud_top = '/particlecloud'
         self.converged = False
-        self.std_position_threshold = 0.2
+        self.std_position_threshold = 0.4   
 
         # become a behaviour
         super(amcl_convergence_checker, self).__init__("Paricles Converged ?")
@@ -639,9 +639,8 @@ class navigate_to_pose(pt.behaviour.Behaviour):
     """
 
     def __init__(self, operation):
-
-        rospy.loginfo("Initialising navigating to " + operation + " pose.")
-
+        rospy.loginfo("Initializing navigating to " + operation + " pose.")
+        
         # Set up action client
         self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
         if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
@@ -649,26 +648,23 @@ class navigate_to_pose(pt.behaviour.Behaviour):
             exit()
         rospy.loginfo("%s: Connected to move_base action server")
 
-        # personal goal setting
-        self.goal = MoveBaseGoal()
+        # Get the pose topic
+        operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
+        self.operation_pose = rospy.wait_for_message(operation_pose_top, PoseStamped, timeout=5)
 
-        if operation == "pick":
-            self.goal.target_pose.pose.position = Point(-1.1480, -6.1, -0.001)
-            self.goal.target_pose.pose.orientation = Quaternion(0.0, 0.0, -0.709307863674, 0.70489882574)
-        elif operation == "place":
-            self.goal.target_pose.pose.position = Point(2.6009, -1.7615, 0.0)
-            self.goal.target_pose.pose.orientation = Quaternion(0.0, 0.0, 0.0, 1)        
-        else:
-            rospy.loginfo("Invalid operation!")
-            exit()
-        rospy.loginfo("Sending navigation goal!")
+        print(self.operation_pose)
+     
+        # Get the goal from the pose topic
+        self.goal = MoveBaseGoal()
+        self.goal.target_pose = self.operation_pose
+        rospy.loginfo("Received navigation goal!")
  
         # execution checker
         self.sent_goal = False
         self.finished = False
 
         # become a behaviour
-        super(navigate_to_pose, self).__init__(operation)
+        super(navigate_to_pose, self).__init__("Navigate to " + operation + " pose!")
 
     def update(self):
 
