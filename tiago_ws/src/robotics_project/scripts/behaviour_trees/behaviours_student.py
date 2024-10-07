@@ -5,7 +5,7 @@
 import numpy as np
 import py_trees as pt, py_trees_ros as ptr, rospy
 from geometry_msgs.msg import Twist
-from actionlib import SimpleActionClient
+from actionlib import SimpleActionClient, GoalID
 from play_motion_msgs.msg import PlayMotionAction, PlayMotionGoal
 from robotics_project.srv import MoveHead, MoveHeadRequest, MoveHeadResponse
 from std_srvs.srv import Empty, SetBool, SetBoolRequest  
@@ -272,6 +272,10 @@ class movecube(pt.behaviour.Behaviour):
         # if still trying
         else:
             return pt.common.Status.RUNNING
+    
+    def restart(self):
+        self.tried = False
+        self.done = False
 
 class detectcube(pt.behaviour.Behaviour):
 
@@ -334,6 +338,10 @@ class detectcube(pt.behaviour.Behaviour):
         # if I'm still trying :|
         else:
             return pt.common.Status.RUNNING
+        
+    def restart(self):
+        self.sent_goal = False
+        self.finished = False
 
 
 class cube_detected_on_table2(pt.behaviour.Behaviour):
@@ -473,78 +481,6 @@ class resetpose(pt.behaviour.Behaviour):
         cube_state.reference_frame = 'map'
         return cube_state
 
-class navigate_to_pick_pose(pt.behaviour.Behaviour):
-
-    """
-    Sends a goal to the play motion action server.
-    Returns running whilst awaiting the result,
-    success if the action was succesful, and v.v..
-    """
-
-    def __init__(self):
-
-        rospy.loginfo("Initialising navigating to pick pose.")
-
-        # Set up action client  
-        self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
-        if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
-            rospy.logerr("%s: Could not connect to /move_base action server")
-            exit()
-        rospy.loginfo("%s: Connected to move_base action server")
-
-        # personal goal setting
-        self.goal = MoveBaseGoal()
-
-        # Set the position
-        self.goal.target_pose.pose.position = Point(-1.1480, -6.1, -0.001)
-        # Set the orientation (quaternion)
-        self.goal.target_pose.pose.orientation = Quaternion(0.0, 0.0, -0.709307863674, 0.70489882574)
-        # Send the goal
-        rospy.loginfo("Sending navigation goal!")
- 
-
-        # execution checker
-        self.sent_goal = False
-        self.finished = False
-
-        # become a behaviour
-        super(navigate_to_pick_pose, self).__init__("Navigate to pick pose!")
-
-    def update(self):
-
-        # already tucked the arm
-        if self.finished: 
-            return pt.common.Status.SUCCESS
-        
-        # command to tuck arm if haven't already
-        elif not self.sent_goal:
-
-            # send the goal
-            # Set the goal frame ID (e.g., map frame)
-            self.goal.target_pose.header.frame_id = "map"
-            self.goal.target_pose.header.stamp = rospy.Time.now()
-            self.move_base_ac.send_goal(self.goal)
-            self.sent_goal = True
-
-            # tell the tree you're running
-            return pt.common.Status.RUNNING
-
-        # if I was succesful! :)))))))))
-        elif self.move_base_ac.get_result():
-
-            # than I'm finished!
-            self.finished = True
-            return pt.common.Status.SUCCESS
-
-        # if failed
-        elif not self.move_base_ac.get_result():
-            return pt.common.Status.FAILURE
-
-        # if I'm still trying :|
-        else:
-            return pt.common.Status.RUNNING
-
-
 class amcl_convergence_checker(pt.behaviour.Behaviour):
 
     """
@@ -599,7 +535,6 @@ class amcl_convergence_checker(pt.behaviour.Behaviour):
             self.converged = False
             rospy.loginfo("AMCL has not converged yet.")
 
-
 class update_localization(pt.behaviour.Behaviour):
 
     """
@@ -637,7 +572,7 @@ class sendgoal(pt.behaviour.Behaviour):
     Returns running whilst awaiting the result,
     success if the action was succesful, and v.v..
     
-    @param operation: The operation to perform (e.g., pick, place)
+    @param operation: The operation to perform (e.g., pick, place, cancel).
     @param send_goal_once: If True, the goal is sent only once. If False, the goal is sent every time the behaviour is updated.
                             in order to prevent the robot from replanning.
     """
@@ -651,6 +586,12 @@ class sendgoal(pt.behaviour.Behaviour):
             rospy.logerr("%s: Could not connect to /move_base action server")
             exit()
         rospy.loginfo("%s: Connected to move_base action server")
+
+        if operation == "cancel":
+            self.move_base_ac.cancel_goal()
+            rospy.loginfo("Goal canceled for " + operation + " operation!")
+            self.finished = True
+            return
 
         # Get the pose topic
         operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
