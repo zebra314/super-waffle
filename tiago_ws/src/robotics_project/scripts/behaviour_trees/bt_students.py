@@ -53,13 +53,15 @@ class BehaviourTree(ptr.trees.BehaviourTree):
 			children=[amcl_convergence_checker(), update_localization()]
 		)
 
-		b2 = navigate_to_pose("pick")
+		b2 = sendgoal("pick")
 		b3 = detectcube()
 		b4 = movecube("pick")
-		b5 = navigate_to_pose("place")
+
+		b5 = sendgoal("place")
+		b8 = sendgoal("cancel", b5.get_client())
 		b6 = movecube("place")
 
-		tree = RSequence(name="Main sequence", children=[b1, b2, b3, b4, b5, b6])
+		tree = RSequence(name="Main sequence", children=[b5, b8])
 		super(BehaviourTree, self).__init__(tree)
 
 		# execute the behaviour tree

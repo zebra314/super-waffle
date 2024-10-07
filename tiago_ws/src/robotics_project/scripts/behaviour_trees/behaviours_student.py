@@ -64,6 +64,8 @@ class wait(pt.behaviour.Behaviour):
         # increment i
         self.i += 1
 
+        rospy.loginfo("Waiting for %s seconds!", self.n)
+
         # succeed after count is done
         return pt.common.Status.RUNNING if self.i <= self.n else pt.common.Status.SUCCESS
 
@@ -502,7 +504,7 @@ class amcl_convergence_checker(pt.behaviour.Behaviour):
     def update(self):
 
         particles = rospy.wait_for_message(self.particlecloud_top, PoseArray, timeout=5)
-        rospy.loginfo("Cloud particles received, checking convergence!")
+        # rospy.loginfo("Cloud particles received, checking convergence!")
 
         # Extract particles from the PoseArray message
         rec_particles = [(pose.position.x, pose.position.y) for pose in particles.poses]
@@ -525,7 +527,7 @@ class amcl_convergence_checker(pt.behaviour.Behaviour):
         y_stddev = np.std(particles_array[:, 1])  # Standard deviation of y
 
         # Tuning the standard deviation
-        rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
+        # rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
 
         # Check if both x and y standard deviations are below the threshold
         if x_stddev < self.std_position_threshold and y_stddev < self.std_position_threshold:
@@ -577,49 +579,59 @@ class sendgoal(pt.behaviour.Behaviour):
                             in order to prevent the robot from replanning.
     """
 
-    def __init__(self, operation, send_goal_once=True):
+    def __init__(self, operation, client=None):
         rospy.loginfo("Initializing send goal behaviour for " + operation + " operation!")
         
         # Set up action client
-        self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
+        if client:
+            self.move_base_ac = client
+        else:
+            self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
+
+        # Connect to the action server
         if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
             rospy.logerr("%s: Could not connect to /move_base action server")
             exit()
         rospy.loginfo("%s: Connected to move_base action server")
 
-        if operation == "cancel":
-            self.move_base_ac.cancel_goal()
-            rospy.loginfo("Goal canceled for " + operation + " operation!")
-            self.finished = True
-            return
+        if operation =="cancel":
+            self.cancel_pub = rospy.Publisher("/move_base/cancel", GoalID, queue_size=1)
+            self.cancel_msg = GoalID()
+        else:
+            # Get the pose from the pose topic
+            operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
+            self.operation_pose = rospy.wait_for_message(operation_pose_top, PoseStamped, timeout=5)
+            
+            # Get the goal from the pose topic
+            self.goal = MoveBaseGoal()
+            self.goal.target_pose = self.operation_pose
+            rospy.loginfo("Received goal pose for " + operation + " operation!")
 
-        # Get the pose topic
-        operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
-        self.operation_pose = rospy.wait_for_message(operation_pose_top, PoseStamped, timeout=5)
-     
-        # Get the goal from the pose topic
-        self.goal = MoveBaseGoal()
-        self.goal.target_pose = self.operation_pose
-        rospy.loginfo("Received goal pose for " + operation + " operation!")
- 
         # Execution checker, Boolean to check the task status
-        self.sent_goal_once = send_goal_once
+        self.operation = operation
         self.sent_goal = False
         self.finished = False
 
         # Become a behaviour
-        super(sendgoal, self).__init__("Send goal to " + operation + " pose!")
+        super(sendgoal, self).__init__("Send goal:" + operation)
+
+    def get_client(self):
+        return self.move_base_ac
 
     def update(self):
-
         # Already done the task
         if self.finished:
-            if not self.sent_goal_once:
-                self.finished = False
             return pt.common.Status.SUCCESS
         
         # Not sent the goal yet
-        elif not self.sent_goal:
+        elif not self.sent_goal and self.operation == "cancel":
+            self.cancel_pub.publish(self.cancel_msg)
+            self.sent_goal = True
+            self.finished = True
+            return pt.common.Status.SUCCESS
+
+        # Not sent the goal yet
+        elif not self.sent_goal and self.operation != "cancel":
             self.goal.target_pose.header.frame_id = "map"
             self.goal.target_pose.header.stamp = rospy.Time.now()
             self.move_base_ac.send_goal(self.goal)
