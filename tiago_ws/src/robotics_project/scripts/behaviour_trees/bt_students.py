@@ -46,22 +46,43 @@ class BehaviourTree(ptr.trees.BehaviourTree):
 		# tree = RSequence(name="Main sequence", children=[b0, b1, b2, b3, b4, b5, b6])
 		# super(BehaviourTree, self).__init__(tree)
 
-		b0 = tuckarm()
+		# Part A
+		# b0 = tuckarm()
 
-		b1 = pt.composites.Selector(
-			name="Perform localization",
-			children=[amcl_convergence_checker(), update_localization()]
-		)
+		# b1 = pt.composites.Selector(
+		# 	name="Perform initial localization",
+		# 	children=[amcl_convergence_checker(), update_localization(mode = 0)]
+		# ) 
 
-		b2 = sendgoal("pick")
-		b3 = detectcube()
-		b4 = movecube("pick")
+		# b212 =  pt.composites.Selector(
+		# 	name="Perform re-localization",
+		# 	children=[amcl_convergence_checker(), update_localization(mode = 1)]
+		# ) 
 
-		b5 = sendgoal("place")
-		b8 = sendgoal("cancel", b5.get_client())
-		b6 = movecube("place")
+		# send_goal_pick = sendgoal("pick")
+		# b21 = RSequence(name="Kidnap checking sequence", children=[kidnap_checker(send_goal_pick), cancel_goal(send_goal_pick.get_action_client()), b212, gather_cues(1, 100), sendgoal("pick")]) # send goal still missing
+		# b22 = send_goal_pick 
 
-		tree = RSequence(name="Main sequence", children=[b5, b8])
+		# b2 = pt.composites.Selector(
+		# 	name="Nanvigation and kidnap checking",
+		# 	children=[b21, b22]
+		# )
+
+		# b3 = detectcube()
+		
+		# b4 = movecube('pick')	
+
+		# b5 = sendgoal('place')
+
+		# b6 = movecube('place')
+
+		# b7 = cube_detected_on_table2()
+
+		blackboard = Blackboard()
+		b1 = convergence_checker(blackboard)
+		b2 = update_localization(blackboard)
+
+		tree = RSequence(name="Main sequence", children=[b1, b2])
 		super(BehaviourTree, self).__init__(tree)
 
 		# execute the behaviour tree
