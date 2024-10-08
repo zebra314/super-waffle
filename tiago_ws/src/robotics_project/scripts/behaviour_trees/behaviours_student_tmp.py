@@ -191,13 +191,13 @@ class update_localization(pt.behaviour.Behaviour):
         
         elif not converged and safe:
             rospy.loginfo("Robot not converged, but safe!")
-            self.update_localization_srv_req = self.update_localization_srv()
+            # self.update_localization_srv_req = self.update_localization_srv()
             status = pt.common.Status.SUCCESS
 
         else:
             # converged and safe
             rospy.loginfo("Robot is converged and safe!")
-            self.update_localization_srv_req = self.update_localization_srv()
+            # self.update_localization_srv_req = self.update_localization_srv()
             status = pt.common.Status.SUCCESS
         
         return status
