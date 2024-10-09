@@ -79,9 +79,17 @@ class BehaviourTree(ptr.trees.BehaviourTree):
 		# b7 = cube_detected_on_table2()
 
 		blackboard = Blackboard()
-		b1 = convergence_checker(blackboard)
-		b2 = update_localization(blackboard)
 
+		b1 = check_convergence(blackboard)
+		b2 = update_localization(blackboard)
+		b3 = move_pose("pick_pose", blackboard)
+		b4 = detect_cube(blackboard)
+		b5 = move_cube("pick", blackboard)
+		b6 = move_pose("place_pose", blackboard)
+		b7 = move_cube("place", blackboard)
+		b8 = check_cube(blackboard)
+		b9 = check_end(blackboard)
+		
 		tree = RSequence(name="Main sequence", children=[b1, b2])
 		super(BehaviourTree, self).__init__(tree)
 

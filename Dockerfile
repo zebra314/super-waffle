@@ -58,8 +58,6 @@ RUN apt-get install -y ros-noetic-gazebo-ros-control
 RUN apt-get install -y ros-noetic-gazebo-ros-pkgs
 RUN apt-get install -y ros-noetic-xacro 
 RUN apt-get install -y ros-noetic-amcl
-RUN apt-get install -y libopencv-dev
-RUN apt-get install -y python3-opencv
 RUN apt-get install -y ros-noetic-vision-opencv
 RUN apt-get install -y ros-noetic-cv-bridge
 RUN apt-get install -y ros-noetic-image-transport
@@ -81,6 +79,30 @@ RUN apt-get install -y ros-noetic-py-trees
 RUN apt-get install -y ros-noetic-py-trees-ros
 RUN apt-get install -y ros-noetic-roslint
 RUN apt-get install -y ros-noetic-depthimage-to-laserscan
+
+# Install OpenCV
+RUN apt-get install -y libopencv-dev
+RUN apt-get install -y python3-opencv
+RUN apt-get install -y cmake
+RUN apt-get install -y pkg-config
+RUN apt-get install -y libgtk-3-dev
+RUN apt-get install -y libjpeg-dev
+RUN apt-get install -y libpng-dev
+RUN apt-get install -y libtiff-dev
+
+# Clone and build OpenCV (with opencv_contrib for xfeatures2d)          
+WORKDIR /root
+RUN git clone https://github.com/opencv/opencv.git \
+    && git clone https://github.com/opencv/opencv_contrib.git
+
+WORKDIR /root/opencv/build
+RUN cmake -D CMAKE_BUILD_TYPE=Release \
+          -D CMAKE_INSTALL_PREFIX=/usr/local \
+          -D OPENCV_EXTRA_MODULES_PATH=/root/opencv_contrib/modules \
+          -D BUILD_EXAMPLES=OFF .. \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig
 
 # # Install ROS dependencies using rosdep
 # # Take approximately 15 minutes

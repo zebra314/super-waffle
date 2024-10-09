@@ -59,8 +59,7 @@ class Blackboard(pt.behaviour.Behaviour):
         else:
             rospy.logerr("Invalid stage!")
 
-
-class convergence_checker(pt.behaviour.Behaviour):
+class check_convergence(pt.behaviour.Behaviour):
 
     """
     Checks if AMCL has converged by thresholding the standard 
@@ -82,8 +81,8 @@ class convergence_checker(pt.behaviour.Behaviour):
         self.converged_threshold = 0.05
 
         # Become a behaviour
-        super(convergence_checker, self).__init__("Convergence checker")
-
+        super(check_convergence, self).__init__("Convergence checker")
+    
     def update(self):
 
         x_stddev, y_stddev = self.get_stddev()
@@ -94,7 +93,7 @@ class convergence_checker(pt.behaviour.Behaviour):
         # Not converged and not safe
         if (x_stddev > self.safe_threshold or y_stddev > self.safe_threshold):
             if self.blackboard.get("localizing"):
-                print_status = "localizing"
+                print_status = "localizing, kidnapped range"
             else:
                 self.blackboard.set("converged", False)
                 self.blackboard.set("safe", False)
@@ -116,14 +115,14 @@ class convergence_checker(pt.behaviour.Behaviour):
         # Not converged but safe
         else:
             if self.blackboard.get("localizing"):
-                print_status = "localizing"
+                print_status = "localizing , safe range"
             else:
                 self.blackboard.set("converged", False)
                 self.blackboard.set("safe", True)
                 self.blackboard.set("kidnapped", False)
                 print_status = "safe"
         
-        # rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
+        rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
         rospy.loginfo(f"Robot is {print_status}!")
 
         return pt.common.Status.SUCCESS
@@ -150,7 +149,7 @@ class update_localization(pt.behaviour.Behaviour):
 
     def __init__(self, blackboard):
 
-        rospy.loginfo("Initializing global and update localization.")
+        rospy.loginfo("Initialize global and update localization.")
 
         self.blackboard = blackboard
 
@@ -202,7 +201,7 @@ class update_localization(pt.behaviour.Behaviour):
         
         return status
 
-class sendgoal(pt.behaviour.Behaviour):
+class move_pose(pt.behaviour.Behaviour):
 
     """
     Sends a goal to the play motion action server.
@@ -213,7 +212,10 @@ class sendgoal(pt.behaviour.Behaviour):
     def __init__(self, operation, blackboard):
         rospy.loginfo("Initializing send goal")
         
+        # Execution checker, Boolean to check the task status
         self.blackboard = blackboard
+        self.operation = operation
+        self.tried = False   
 
         # Set up action client
         self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
@@ -233,12 +235,8 @@ class sendgoal(pt.behaviour.Behaviour):
         self.goal.target_pose = self.operation_pose
         rospy.loginfo("Received goal pose for " + operation + " operation!")
 
-        # Execution checker, Boolean to check the task status
-        self.operation = operation
-        self.sent = False   
-
         # Become a behaviour
-        super(sendgoal, self).__init__(operation)
+        super(move_pose, self).__init__(operation)
 
     def get_goal(self):
         """
@@ -265,7 +263,8 @@ class sendgoal(pt.behaviour.Behaviour):
     def update(self):
         self.goal = self.get_goal()
 
-        exclude_goals = ["detect_cube", "pick", "place"] # Send by other nodes
+        # Send by other nodes
+        exclude_goals = ["detect_cube", "pick", "place"]
 
         # Cancel the goal when kidnapped
         if self.goal == "cancel":
@@ -286,11 +285,11 @@ class sendgoal(pt.behaviour.Behaviour):
             self.goal.target_pose.header.frame_id = "map"
             self.goal.target_pose.header.stamp = rospy.Time.now()
             self.move_base_ac.send_goal(self.goal)
-            self.sent = True
+            self.tried = True
             status = pt.common.Status.RUNNING
 
         # Already sent the goal and not yet received the result
-        elif self.sent:
+        elif self.tried:
             self.move_base_ac.wait_for_result()
             state = self.move_base_ac.get_state()
 
@@ -310,3 +309,275 @@ class sendgoal(pt.behaviour.Behaviour):
             status = pt.common.Status.SUCCESS
 
         return status
+
+class move_cube(pt.behaviour.Behaviour):
+
+    """
+    Pick or place the cube.
+    Returns running whilst awaiting the result,
+    success if the action was succesful, and v.v..
+    """
+
+    def __init__(self, operation, blackboard):
+
+        rospy.loginfo("Initializing move cube behaviour.")
+
+        # Execution checker
+        self.blackboard = blackboard
+        self.operation = operation
+        self.tried = False
+
+        # Setup the server
+        mv_cube_srv = '/' + operation + '_srv'
+        mv_cube_srv_nm = rospy.get_param(rospy.get_name() + mv_cube_srv)
+        self.move_cube_srv = rospy.ServiceProxy(mv_cube_srv_nm, SetBool)
+        rospy.wait_for_service(mv_cube_srv_nm, timeout=30)
+
+        # become a behaviour
+        super(move_cube, self).__init__("GET EM!")
+
+    def get_goal(self):
+        """
+        Goal sequence:
+            "pick_pose"  
+            "detect_cube"
+            "pick"      
+            "place_pose"
+            "place"     
+        """
+        if self.blackboard.get("kidnapped"):
+            return "cancel"
+        elif not self.blackboard.get("pick_pose"):
+            return "pick"
+        elif not self.blackboard.get("detect_cube"):
+            return "detect_cube"
+        elif not self.blackboard.get("pick"):
+            return "pick"
+        elif not self.blackboard.get("place_pose"):
+            return "place_pose"
+        elif not self.blackboard.get("place"):
+            return "place"
+
+    def update(self):
+        self.goal = self.get_goal()
+
+        # Send by other nodes
+        # NOTE: we can't cancel the service here
+        exclude_goals = ["detect_cube", "pick_pose", "place_pose", "cancel"]
+
+        # Skip the goal if operation not matching with the goal
+        if self.goal in exclude_goals or self.operation != self.goal:
+            status = pt.common.Status.SUCCESS
+
+        # Skip the goal if already done
+        elif self.blackboard.get(self.operation):
+            status = pt.common.Status.SUCCESS
+
+        # Operation matched with the goal and not yet sent the goal
+        elif not self.tried:
+            self.move_cube_req = self.move_cube_srv()
+            self.tried = True
+            status = pt.common.Status.RUNNING
+
+        # Already sent the goal and not yet received the result
+        elif self.tried and self.move_cube_req.success:
+            self.blackboard.set(self.operation, True)
+            status = pt.common.Status.SUCCESS
+
+        # Task is successful
+        elif self.move_base_ac.get_result():
+            self.blackboard.set(self.operation, True)
+            status = pt.common.Status.SUCCESS
+
+        # Task is failed
+        elif not self.move_cube_req.success:
+            status = pt.common.Status.FAILURE
+
+        return status
+    
+class detect_cube(pt.behaviour.Behaviour):
+
+    """
+    Sends a goal to the play motion action server.
+    Returns running whilst awaiting the result,
+    success if the action was succesful, and v.v..
+    """
+
+    def __init__(self, blackboard):
+
+        rospy.loginfo("Initializing detect cube behaviour.")
+
+        # Execution checker
+        self.blackboard = blackboard
+        self.tried = False
+
+        # Set up action client
+        self.play_motion_ac = SimpleActionClient("/play_motion", PlayMotionAction)
+        if not self.play_motion_ac.wait_for_server(rospy.Duration(1000)):
+            rospy.logerr("%s: Could not connect to /play_motion action server")
+            exit()
+        rospy.loginfo("%s: Connected to play_motion action server")
+
+        # Goal setup
+        self.goal = PlayMotionGoal()
+        self.goal.motion_name = 'inspect_surroundings'
+        self.goal.skip_planning = True
+
+        # become a behaviour
+        super(detect_cube, self).__init__("Detect cube!")
+
+    def update(self):
+        
+        # Cancel the goal when kidnapped
+        if self.blackboard.get("kidnapped"):
+            self.play_motion_ac.cancel_goal()
+            rospy.loginfo("Goal cancelled successfully")
+            status = pt.common.Status.SUCCESS
+
+        # Skip the goal if already done
+        elif self.blackboard.get("detect_cube"):
+            status = pt.common.Status.SUCCESS
+        
+        # Not yet sent the goal
+        elif not self.tried:
+            self.play_motion_ac.send_goal(self.goal)
+            self.tried = True
+            status = pt.common.Status.RUNNING
+
+        # Already sent the goal and not yet received the result
+        elif self.tried:
+            self.play_motion_ac.wait_for_result()
+            state = self.play_motion_ac.get_state()
+
+            if state == GoalStatus.ABORTED or state == GoalStatus.REJECTED:
+                status = pt.common.Status.FAILURE
+            elif state == GoalStatus.PENDING or state == GoalStatus.ACTIVE:
+                status = pt.common.Status.RUNNING
+            elif state == GoalStatus.SUCCEEDED: # TODO: Check if this works
+                self.blackboard.set(self.operation, True)
+                status = pt.common.Status.SUCCESS
+            else:
+                status = pt.common.Status.RUNNING
+
+        # Task is successful
+        elif self.move_base_ac.get_result():
+            self.blackboard.set(self.operation, True)
+            status = pt.common.Status.SUCCESS
+
+        return status
+
+class check_cube(pt.behaviour.Behaviour):
+
+    """
+    Returns if cube is placed on table 2.
+    """
+
+    def __init__(self, blackboard):
+
+        rospy.loginfo("Initializing check cube behaviour.")
+
+        # Execution checker
+        self.blackboard = blackboard
+        self.tried = False
+
+        # Set up cube pose topic
+        self.aruco_pose_top = rospy.get_param(rospy.get_name() + '/aruco_pose_topic')
+
+        # Become a behaviour
+        super(check_cube, self).__init__("Check cube on table 2!")
+
+    def update(self):
+
+        # Cancel the goal when kidnapped
+        if self.blackboard.get("kidnapped"):
+            status = pt.common.Status.SUCCESS
+
+        # Skip the goal if already done
+        elif self.blackboard.get("cube_on_table2"):
+            status = pt.common.Status.SUCCESS        
+
+        # Try if not tried
+        elif not self.tried:
+            try: 
+                rospy.loginfo("Checking if cube is detected on table 2!")
+                detected_cube_pose_msg = rospy.wait_for_message(self.aruco_pose_top, PoseStamped, timeout=10)
+                rospy.loginfo("Detected cube pose on table 2 %s!", detected_cube_pose_msg)
+                self.blackboard.set("cube_on_table2", True)
+                rospy.loginfo("Job is done, I nailed it!")
+                status = pt.common.Status.SUCCESS
+            except: 
+                rospy.loginfo("Cube not detected on table 2!")
+                rospy.loginfo("Job not done, damn it!")
+                status = pt.common.Status.FAILURE
+
+            self.tried = True
+        
+        # Already tried
+        else:
+            status = pt.common.Status.SUCCESS
+    
+        return status
+
+class check_end(pt.behaviour.Behaviour):
+
+    """
+    Returns if the robot has completed the task.
+        - If done, return SUCCESS
+        - If not done, reset the task and return FAILURE
+    """
+
+    def __init__(self, blackboard):
+
+        rospy.loginfo("Initializing check end behaviour.")
+
+        # Execution checker
+        self.blackboard = blackboard
+
+        # Set up reset service
+        rospy.wait_for_service('/gazebo/set_model_state', timeout=30)
+        self.reset_srv = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)  # Create a service proxy
+
+        # Become a behaviour
+        super(check_end, self).__init__("Check end!")
+
+    def update(self):
+
+        # If cube is detected on table 2, done
+        if self.blackboard.get("cube_on_table2"):
+            status = pt.common.Status.SUCCESS
+        
+        # If kidnapped, not yet done
+        elif self.blackboard.get("kidnapped"):
+            status = pt.common.Status.FAILURE
+
+        # If not done, reset the task
+        else:
+            self.blackboard.set("pick_pose", False)
+            self.blackboard.set("detect_cube", False)
+            self.blackboard.set("pick", False)
+            self.blackboard.set("place_pose", False)
+            self.blackboard.set("place", False)
+            self.blackboard.set("cube_on_table2", False)
+            self.reset_cube()
+            status = pt.common.Status.FAILURE
+        
+        return status
+    
+    def reset_cube(self):
+        cube_state = ModelState()
+        cube_state.model_name = 'aruco_cube'
+        cube_state.pose.position.x = -1.130530
+        cube_state.pose.position.y = -6.653650
+        cube_state.pose.position.z = 0.86250
+        cube_state.pose.orientation.x = 0
+        cube_state.pose.orientation.y = 0
+        cube_state.pose.orientation.z = 0
+        cube_state.pose.orientation.w = 1
+        cube_state.twist.linear.x = 0
+        cube_state.twist.linear.y = 0
+        cube_state.twist.linear.z = 0
+        cube_state.twist.angular.x = 0
+        cube_state.twist.angular.y = 0
+        cube_state.twist.angular.z = 0
+        cube_state.reference_frame = 'map'
+        self.reset_srv(cube_state)
