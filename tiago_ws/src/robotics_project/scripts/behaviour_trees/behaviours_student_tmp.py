@@ -106,6 +106,7 @@ class check_convergence(pt.behaviour.Behaviour):
             # End of localizing
             if self.blackboard.get("localizing"):
                 self.blackboard.set("localizing", False)
+                self.blackboard.set("initialised", True)
 
             self.blackboard.set("converged", True)
             self.blackboard.set("safe", True)
@@ -210,7 +211,7 @@ class move_pose(pt.behaviour.Behaviour):
     """
 
     def __init__(self, operation, blackboard):
-        rospy.loginfo("Initializing send goal")
+        rospy.loginfo("Initializing move pose behaviour.")
         
         # Execution checker, Boolean to check the task status
         self.blackboard = blackboard
@@ -222,9 +223,9 @@ class move_pose(pt.behaviour.Behaviour):
 
         # Connect to the action server
         if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
-            rospy.logerr("%s: Could not connect to /move_base action server")
+            rospy.logerr("Could not connect to /move_base action server")
             exit()
-        rospy.loginfo("%s: Connected to move_base action server")
+        rospy.loginfo("Connected to move_base action server")
 
         # Get the pose from the pose topic
         operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
@@ -287,6 +288,7 @@ class move_pose(pt.behaviour.Behaviour):
             self.move_base_ac.send_goal(self.goal)
             self.tried = True
             status = pt.common.Status.RUNNING
+            rospy.loginfo("Sending goal to move_base action server!")
 
         # Already sent the goal and not yet received the result
         elif self.tried:
@@ -454,14 +456,14 @@ class detect_cube(pt.behaviour.Behaviour):
             elif state == GoalStatus.PENDING or state == GoalStatus.ACTIVE:
                 status = pt.common.Status.RUNNING
             elif state == GoalStatus.SUCCEEDED: # TODO: Check if this works
-                self.blackboard.set(self.operation, True)
+                self.blackboard.set("detect_cube", True)
                 status = pt.common.Status.SUCCESS
             else:
                 status = pt.common.Status.RUNNING
 
         # Task is successful
         elif self.move_base_ac.get_result():
-            self.blackboard.set(self.operation, True)
+            self.blackboard.set("detect_cube", True)
             status = pt.common.Status.SUCCESS
 
         return status
@@ -518,7 +520,7 @@ class check_cube(pt.behaviour.Behaviour):
     
         return status
 
-class check_end(pt.behaviour.Behaviour):
+class check_end(pt.behaviour.Behaviour):    
 
     """
     Returns if the robot has completed the task.
