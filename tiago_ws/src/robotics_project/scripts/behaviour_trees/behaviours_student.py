@@ -5,7 +5,7 @@
 import numpy as np
 import py_trees as pt, py_trees_ros as ptr, rospy
 from geometry_msgs.msg import Twist
-from actionlib import SimpleActionClient, GoalStatus
+from actionlib import SimpleActionClient, GoalID
 from play_motion_msgs.msg import PlayMotionAction, PlayMotionGoal
 from robotics_project.srv import MoveHead, MoveHeadRequest, MoveHeadResponse
 from std_srvs.srv import Empty, SetBool, SetBoolRequest  
@@ -40,7 +40,6 @@ class counter(pt.behaviour.Behaviour):
         # succeed after count is done
         return pt.common.Status.FAILURE if self.i <= self.n else pt.common.Status.SUCCESS
 
-
 class wait(pt.behaviour.Behaviour):
 
     """
@@ -65,7 +64,6 @@ class wait(pt.behaviour.Behaviour):
 
         # succeed after count is done
         return pt.common.Status.RUNNING if self.i <= self.n else pt.common.Status.SUCCESS
-
 
 class go(pt.behaviour.Behaviour):
 
@@ -311,7 +309,7 @@ class detectcube(pt.behaviour.Behaviour):
         
         # command to tuck arm if haven't already
         elif not self.sent_goal:
-
+            rospy.loginfo('Detecting cube now!')
             # send the goal
             self.play_motion_ac.send_goal(self.goal)
             self.sent_goal = True
@@ -334,14 +332,13 @@ class detectcube(pt.behaviour.Behaviour):
         else:
             return pt.common.Status.RUNNING
 
-
 class cube_detected_on_table2(pt.behaviour.Behaviour):
 
     """
     Returns if cube is placed on table 2.
     """
 
-    def __init__(self):
+    def __init__(self, mission_done =  None, mode = 0):
 
         rospy.loginfo("Initialising placement detection of cube on table 2.")
 
@@ -349,6 +346,9 @@ class cube_detected_on_table2(pt.behaviour.Behaviour):
 
         self.detected_cube = False
         self.listened = False
+
+        self.mission_done = mission_done
+        self.mode = mode
 
         # become a behaviour
         super(cube_detected_on_table2, self).__init__("Is_job_done")
@@ -359,8 +359,12 @@ class cube_detected_on_table2(pt.behaviour.Behaviour):
         if self.listened:
             if self.detected_cube:
                 return pt.common.Status.SUCCESS
-            else:
+            elif (not self.detected_cube) and self.mode == 0:
                 return pt.common.Status.FAILURE
+            elif (not self.detected_cube) and self.mode == 1:
+                return pt.common.Status.SUCCESS
+            else:
+                return pt.common.Status.SUCCESS
 
         # try if not tried
         elif not self.listened:
@@ -370,6 +374,8 @@ class cube_detected_on_table2(pt.behaviour.Behaviour):
                 detected_cube_pose_msg = rospy.wait_for_message(self.aruco_pose_top, PoseStamped, timeout=10)
                 rospy.loginfo("Detected cube pose on table 2 %s!", detected_cube_pose_msg)
                 self.detected_cube = True
+                if self.mission_done is not None:
+                    self.mission_done.task_finished = True
                 rospy.loginfo("Job is done, I nailed it!")
             except: 
                 rospy.loginfo("Cube not detected on table 2!")
@@ -385,11 +391,16 @@ class resetpose(pt.behaviour.Behaviour):
     Resets the pose of the robot and cube.
     Returns running whilst awaiting the result,
     success if the action was succesful, and v.v..
+    mode = 0 (default); resets the robot and the cube to initial state (Task C)
+    mode = 1          ; resets the cube only to initial state (Task A)
     """
 
-    def __init__(self):
-
+    def __init__(self, mode = 0):
+        
+        # mode 
+        self.mode = mode
         rospy.loginfo("Initialising the resetting of the pose of the robot and cube.")
+
         rospy.wait_for_service('/gazebo/set_model_state', timeout=30)
         self.reset_srv = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)  # Create a service proxy
 
@@ -400,8 +411,10 @@ class resetpose(pt.behaviour.Behaviour):
         self.tried = False
         self.done = False
 
+        self.success_robot = True 
+
         # become a behaviour
-        super(resetpose, self).__init__("Lower head!")
+        super(resetpose, self).__init__("Reset cube and/or robot!")
 
     def update(self):
 
@@ -412,22 +425,25 @@ class resetpose(pt.behaviour.Behaviour):
         # try if not tried
         elif not self.tried:
 
-            # command
-            self.reset_robot_req = self.reset_srv(self.robot_state)
             self.reset_cube_req = self.reset_srv(self.cube_state)
             self.tried = True
+
+            # command
+            if self.mode == 0:
+                self.reset_robot_req = self.reset_srv(self.robot_state)
+                self.success_robot = self.reset_robot_req.success
 
             # tell the tree you're running
             return pt.common.Status.RUNNING
 
         # if succesful
-        elif self.reset_robot_req.success and self.reset_cube_req.success:
+        elif self.success_robot and self.reset_cube_req.success:
             rospy.loginfo("Resetting of the pose of the robot and cube succeeded!.")
             self.done = True
             return pt.common.Status.SUCCESS
 
         # if failed
-        elif not self.reset_robot_req.success or not self.reset_cube_req.success:   
+        elif not self.success_robot or not self.reset_cube_req.success:   
             return pt.common.Status.FAILURE
 
         # if still trying
@@ -472,132 +488,74 @@ class resetpose(pt.behaviour.Behaviour):
         cube_state.reference_frame = 'map'
         return cube_state
 
-class Blackboard(pt.behaviour.Behaviour):
-    
-    """
-    A blackboard to store the state of the stages, shared among all nodes.
-    """
-
-    def __init__(self):
-        rospy.loginfo("Initialize the stage manager.")
-
-        # Initialize all stages with False
-        self.stages = {
-
-            # Localization param
-            "initialised":    False,  # The robot has been initialised
-            "localizing":     False,  # The robot is localizing
-
-            # State param
-            "converged":      False,  # AMCL has converged, the robot know where it is precisely
-            "safe":           False,  # The robot is in a safe position, may achieve this zone when the robot is moving
-            "kidnapped":      True,   # The robot has been kidnapped and doesn't know where it is
-
-            # Task param
-            "pick_pose":      False,
-            "detect_cube":    False,
-            "pick":           False,
-            "place_pose":     False,
-            "place":          False,
-            
-            # Final
-            "cube_on_table2": False,
-        }
-
-    def set(self, stage, status):
-        if stage in self.stages:
-            self.stages[stage] = status
-        else:
-            rospy.logerr("Invalid stage!")
-    
-    def get(self, stage):
-        if stage in self.stages:
-            return self.stages[stage]
-        else:
-            rospy.logerr("Invalid stage!")
-
-
-class convergence_checker(pt.behaviour.Behaviour):
+class amcl_convergence_checker(pt.behaviour.Behaviour):
 
     """
     Checks if AMCL has converged by thresholding the standard 
     deviation in both x and y direction.
     """
 
-    def __init__(self, blackboard):
+    def __init__(self):
 
-        rospy.loginfo("Initialize AMCL convergence checker.")
+        rospy.loginfo("Initialising AMCL convergence checker.")
 
-        self.blackboard = blackboard
-
-        # Topics
         self.particlecloud_top = '/particlecloud'
-        self.amcl_pose_top = '/amcl_pose'
 
-        # Thresholds
-        self.safe_threshold = 0.5
-        self.converged_threshold = 0.05
+        self.std_position_threshold = 0.05
 
-        # Become a behaviour
-        super(convergence_checker, self).__init__("Convergence checker")
+        self.init_localization = False
+
+        # servers to the clear costmaps
+        self.clear_costmaps_srv = rospy.ServiceProxy('/move_base/clear_costmaps', Empty)
+        rospy.wait_for_service('/move_base/clear_costmaps', timeout=30)
+
+        # become a behaviour
+        super(amcl_convergence_checker, self).__init__("Localization converged?")
 
     def update(self):
 
-        x_stddev, y_stddev = self.get_stddev()
+        # Has the robot succeeded in localizing itself initially? 
+        if self.init_localization:
+            return pt.common.Status.SUCCESS
 
-        if x_stddev is None:
+        particles = rospy.wait_for_message(self.particlecloud_top, PoseArray, timeout=5)
+        #rospy.loginfo("Cloud particles received, checking convergence!")
+
+        # Extract particles from the PoseArray message
+        rec_particles = [(pose.position.x, pose.position.y) for pose in particles.poses]
+
+        if len(rec_particles) > 0:
+            self.check_convergence(rec_particles)
+
+        # Localization succeeded ?
+        if self.init_localization:
+            return pt.common.Status.SUCCESS
+        else:
             return pt.common.Status.FAILURE
 
-        # Not converged and not safe
-        if (x_stddev > self.safe_threshold or y_stddev > self.safe_threshold):
-            if self.blackboard.get("localizing"):
-                print_status = "localizing"
-            else:
-                self.blackboard.set("converged", False)
-                self.blackboard.set("safe", False)
-                self.blackboard.set("kidnapped", True)
-                print_status = "kidnapped"
 
-        # Converged and safe
-        elif (x_stddev < self.converged_threshold and y_stddev < self.converged_threshold):
-            
-            # End of localizing
-            if self.blackboard.get("localizing"):
-                self.blackboard.set("localizing", False)
+    def check_convergence(self, particles):
+        # Convert the list of particles to a numpy array for easier processing
+        particles_array = np.array(particles)
 
-            self.blackboard.set("converged", True)
-            self.blackboard.set("safe", True)
-            self.blackboard.set("kidnapped", False)
-            print_status = "converged"
-        
-        # Not converged but safe
-        else:
-            if self.blackboard.get("localizing"):
-                print_status = "localizing"
-            else:
-                self.blackboard.set("converged", False)
-                self.blackboard.set("safe", True)
-                self.blackboard.set("kidnapped", False)
-                print_status = "safe"
-        
-        # rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
-        rospy.loginfo(f"Robot is {print_status}!")
+        # Calculate the mean and standard deviation of the particle positions (x, y)
+        x_stddev = np.std(particles_array[:, 0])  # Standard deviation of x
+        y_stddev = np.std(particles_array[:, 1])  # Standard deviation of y
 
-        return pt.common.Status.SUCCESS
-    
-    def get_stddev(self):
-        particles = rospy.wait_for_message(self.particlecloud_top, PoseArray, timeout=5)
-        rec_particles = [(pose.position.x, pose.position.y) for pose in particles.poses]
-        
-        if len(rec_particles) == 0:
-            rospy.loginfo("No particles received, cannot check convergence!")
-            return None, None
-        
-        particles_array = np.array(rec_particles)
-        x_stddev = np.std(particles_array[:, 0])
-        y_stddev = np.std(particles_array[:, 1])
+        # Tuning the standard deviation
+        #rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
 
-        return x_stddev, y_stddev
+        # Check if both x and y standard deviations are below the threshold
+        if (x_stddev < self.std_position_threshold and y_stddev < self.std_position_threshold):
+            rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
+            rospy.loginfo("Initial localization is successful. PF has converged!")
+            self.init_localization = True
+            # Clear costmaps
+            clear_costmaps_req = self.clear_costmaps_srv()
+            rospy.loginfo("Costmaps cleared successfully!")
+        #else:
+            #rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
+            #rospy.loginfo("Initial localization is not successful yet.")
 
 class update_localization(pt.behaviour.Behaviour):
 
@@ -605,17 +563,22 @@ class update_localization(pt.behaviour.Behaviour):
     Completes an update step for the amcl
     """
 
-    def __init__(self, blackboard):
+    def __init__(self, mode = 0):
 
-        rospy.loginfo("Initializing global and update localization.")
+        rospy.loginfo("Initialising global and update localization.")
 
-        self.blackboard = blackboard
+        self.mode = mode
 
-        # Global localization service
+        # servers to initiate global localization and update localization
         self.global_localization_srv = rospy.ServiceProxy('/global_localization', Empty)
         rospy.wait_for_service('/global_localization', timeout=30)
+        
+        if self.mode == 0:
+            global_localization_req = self.global_localization_srv() # initialize global localization
+            rospy.loginfo("Global localization initialized successfully!")
+        elif self.mode == 1:
+            self.global_localization_done = False
 
-        # Update localization service
         self.update_localization_srv = rospy.ServiceProxy('/request_nomotion_update', Empty)
         rospy.wait_for_service('/request_nomotion_update', timeout=30)
 
@@ -623,41 +586,38 @@ class update_localization(pt.behaviour.Behaviour):
         super(update_localization, self).__init__("Update Robot Localization!")
 
     def update(self):
-
-        # Get the state of the robot from blackboard
-        initialised = self.blackboard.get("initialised")
-        localizing = self.blackboard.get("localizing")
-        converged = self.blackboard.get("converged")
-        safe = self.blackboard.get("safe")
-        kidnapped = self.blackboard.get("kidnapped")
-
-        if localizing:
-            self.update_localization_srv_req = self.update_localization_srv()
-            status = pt.common.Status.RUNNING
-
-        elif not initialised:
-            rospy.loginfo("Robot not initialised yet!")
-            global_localization_req = self.global_localization_srv()
-            self.blackboard.set("localizing", True)
-            status = pt.common.Status.SUCCESS
         
-        elif kidnapped:
-            rospy.loginfo("Robot kidnapped, should cancel goal now!")
-            self.blackboard.set("initialised", False)
-            status = pt.common.Status.SUCCESS
-        
-        elif not converged and safe:
-            rospy.loginfo("Robot not converged, but safe!")
-            self.update_localization_srv_req = self.update_localization_srv()
-            status = pt.common.Status.SUCCESS
+        if self.mode == 1 and (not self.global_localization_done):
+            global_localization_req = self.global_localization_srv() # initialize global localization
+            rospy.loginfo("Global localization initialized successfully!")
+            self.global_localization_done = True
 
-        else:
-            # converged and safe
-            rospy.loginfo("Robot is converged and safe!")
-            self.update_localization_srv_req = self.update_localization_srv()
-            status = pt.common.Status.SUCCESS
+        self.update_localization_srv_req = self.update_localization_srv()
+        #rospy.loginfo("Localization succeeded in updating!")
+        return pt.common.Status.RUNNING
+
+class cancel_goal(pt.behaviour.Behaviour):
+    """
+    Cancels goal
+    """
+    def __init__(self, ac_client):
+
+        rospy.loginfo("Initialising cancel goal.")
+
+        self.ac_client = ac_client
+
+        self.goal_cancelled = False
+        # become a behaviour
+        super(cancel_goal, self).__init__("Cancel Goal!")
+
+    def update(self):
         
-        return status
+        if not self.goal_cancelled:
+            self.ac_client.cancel_goal()
+            rospy.loginfo("Goal cancelled successfully")
+            self.goal_cancelled = True
+
+        return pt.common.Status.SUCCESS
 
 class kidnap_checker(pt.behaviour.Behaviour):
 
@@ -676,11 +636,13 @@ class kidnap_checker(pt.behaviour.Behaviour):
         self.std_position_threshold = 0.4
 
         self.last_position_and_yaw = None
+        #self.det_cov = 0.0
 
         self.kidnapped = False
 
         self.sendgoal = sendgoal
 
+        # become a behaviour
         super(kidnap_checker, self).__init__("Kidnap checker ?")
 
     def update(self):
@@ -688,6 +650,8 @@ class kidnap_checker(pt.behaviour.Behaviour):
         # Is the robot kidnapped? 
         if self.kidnapped:
             return pt.common.Status.SUCCESS
+        elif self.sendgoal.finished:
+            return pt.common.Status.FAILURE
 
         particles = rospy.wait_for_message(self.particlecloud_top, PoseArray, timeout=5)
         #rospy.loginfo("Cloud particles received, checking convergence!")
@@ -698,39 +662,28 @@ class kidnap_checker(pt.behaviour.Behaviour):
         pose_estimate = rospy.wait_for_message(self.amcl_pose_top, PoseWithCovarianceStamped, timeout=5)
 
         Cov_mat = pose_estimate.pose.covariance
-        #Cov_mat_np = np.array(Cov_mat).reshape(6,6)
-        # Extract the position and orientation covariances (x, y, and yaw)
         x_cov = Cov_mat[0]    
         y_cov = Cov_mat[7]    
         yaw_cov = Cov_mat[35]
-
         new_position_and_yaw = x_cov + y_cov + yaw_cov
-        #new_det_cov = np.linalg.det(Cov_mat_np)
+
         if self.last_position_and_yaw is None:
             self.last_position_and_yaw = new_position_and_yaw
             rospy.loginfo(f'Initial covariance {new_position_and_yaw}')
             return pt.common.Status.RUNNING
-
-        change_in_position_and_yaw = new_position_and_yaw - self.last_position_and_yaw
-        rospy.loginfo(f"Change in P_xx*P_yy*P_yawyaw: {change_in_position_and_yaw}")
-        #rospy.loginfo(f'Covariance in x: {x_cov}, y: {y_cov} yaw:{yaw_cov} ')
-        if abs(change_in_position_and_yaw) > 2e-2:
-            rospy.loginfo('-------------------------------------------------------')
-            rospy.loginfo('Robot kidnapped!!!!')
-        #rospy.loginfo(f'Determinant of Covariance Matrix: {new_det_cov}')
-        #rospy.loginfo(f"Change in det P: {abs(new_det_cov - self.det_cov)}") 
         
-        self.last_position_and_yaw = new_position_and_yaw
-        #self.det_cov = new_det_cov
-
         if len(rec_particles) > 0:
-            self.check_convergence(rec_particles)
+            self.check_convergence(rec_particles, new_position_and_yaw)
+            self.last_position_and_yaw = new_position_and_yaw
 
+
+        if self.kidnapped:
+            return pt.common.Status.SUCCESS 
 
         # tell the tree you've failed, you sucker!!
         return pt.common.Status.FAILURE
             
-    def check_convergence(self, particles):
+    def check_convergence(self, particles, new_position_and_yaw):
         # Convert the list of particles to a numpy array for easier processing
         particles_array = np.array(particles)
 
@@ -741,17 +694,20 @@ class kidnap_checker(pt.behaviour.Behaviour):
         # Tuning the standard deviation
         #rospy.loginfo(f"Standard deviations - X + Y: {x_stddev + y_stddev}")
 
-        # Check if both x and y standard deviations are below the threshold
-        if (x_stddev + y_stddev > self.std_position_threshold):
+        change_in_position_and_yaw = new_position_and_yaw - self.last_position_and_yaw
+
+        if abs(change_in_position_and_yaw) > 1e-2:
+            rospy.loginfo(f"Change in P_xx*P_yy*P_yawyaw: {change_in_position_and_yaw}")
+            rospy.loginfo('Robot kidnapped!!!!')
+            self.kidnapped = True
+            self.sendgoal.finished = True
+
+        elif (x_stddev + y_stddev > self.std_position_threshold):
             #rospy.loginfo(f"Standard deviations - X + Y: {x_stddev + y_stddev}")
             rospy.loginfo("Robot is kidnapped, should cancel goal now!")
             self.kidnapped = True
             self.sendgoal.finished = True
-            return pt.common.Status.SUCCESS
-        else:
-            return pt.common.Status.FAILURE
-            #rospy.loginfo(f"Standard deviations - X: {x_stddev}, Y: {y_stddev}")
-            #rospy.loginfo("Initial localization is not successful yet.")
+
     
     def get_kidnapped_state(self):
         return self.kidnapped
@@ -762,15 +718,19 @@ class sendgoal(pt.behaviour.Behaviour):
     Sends a goal to the play motion action server.
     Returns running whilst awaiting the result,
     success if the action was succesful, and v.v..
+    
+    @param operation: The operation to perform (e.g., pick, place, cancel).
     """
 
-    def __init__(self, operation, blackboard):
-        rospy.loginfo("Initializing send goal")
-        
-        self.blackboard = blackboard
+    def __init__(self, operation, client=None):
+        rospy.loginfo("Initializing send goal behaviour for " + operation + " operation!")
+        self.operation = operation
 
         # Set up action client
-        self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
+        if client:
+            self.move_base_ac = client
+        else:
+            self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
 
         # Connect to the action server
         if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
@@ -778,92 +738,67 @@ class sendgoal(pt.behaviour.Behaviour):
             exit()
         rospy.loginfo("%s: Connected to move_base action server")
 
-        # Get the pose from the pose topic
-        operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
-        self.operation_pose = rospy.wait_for_message(operation_pose_top, PoseStamped, timeout=5)
-
-        # Get the goal from the pose topic
-        self.goal = MoveBaseGoal()
-        self.goal.target_pose = self.operation_pose
-        rospy.loginfo("Received goal pose for " + operation + " operation!")
+        if operation =="cancel":
+            self.cancel_pub = rospy.Publisher("/move_base/cancel", GoalID, queue_size=1)
+            self.cancel_msg = GoalID()
+        else:
+            # Get the pose from the pose topic
+            operation_pose_top = rospy.get_param(rospy.get_name() + '/' + operation + '_pose_topic')
+            self.operation_pose = rospy.wait_for_message(operation_pose_top, PoseStamped, timeout=5)
 
         # Execution checker, Boolean to check the task status
         self.operation = operation
-        self.sent = False   
+        self.sent_goal = False
+        self.finished = False
 
         # Become a behaviour
-        super(sendgoal, self).__init__(operation)
+        super(sendgoal, self).__init__("Send goal:" + operation)
 
-    def get_goal(self):
-        """
-        Goal sequence:
-            "pick_pose"  
-            "detect_cube"
-            "pick"      
-            "place_pose"
-            "place"     
-        """
-        if self.blackboard.get("kidnapped"):
-            return "cancel"
-        elif not self.blackboard.get("pick_pose"):
-            return "pick"
-        elif not self.blackboard.get("detect_cube"):
-            return "detect_cube"
-        elif not self.blackboard.get("pick"):
-            return "pick"
-        elif not self.blackboard.get("place_pose"):
-            return "place_pose"
-        elif not self.blackboard.get("place"):
-            return "place"
+    def get_action_client(self):
+        return self.move_base_ac
+    
+    def get_new_goal(self):
+        goal = MoveBaseGoal()
+        goal.target_pose = self.operation_pose
+        goal.target_pose.header.frame_id = "map"
+        goal.target_pose.header.stamp = rospy.Time.now()
+        rospy.loginfo("Received goal pose for " + self.operation + " operation!")
+        return goal
 
     def update(self):
-        self.goal = self.get_goal()
+        # Already done the task
+        if self.finished:
+            return pt.common.Status.SUCCESS
+        
+        # Not sent the goal yet
+        elif not self.sent_goal and self.operation == "cancel":
+            self.cancel_pub.publish(self.cancel_msg)
+            self.sent_goal = True
+            self.finished = True
+            return pt.common.Status.SUCCESS
 
-        exclude_goals = ["detect_cube", "pick", "place"]
+        # Not sent the goal yet
+        elif not self.sent_goal and self.operation != "cancel":
+            goal = self.get_new_goal()
+            self.move_base_ac.send_goal(goal)
+            self.sent_goal = True
+            return pt.common.Status.RUNNING
 
-        # Cancel the goal when kidnapped
-        if self.goal == "cancel":
-            self.move_base_ac.cancel_goal()
-            rospy.loginfo("Goal cancelled successfully")
-            status = pt.common.Status.SUCCESS
-
-        # Skip the goal if operation not matching with the goal
-        elif self.goal in exclude_goals or self.operation != self.goal:
-            status = pt.common.Status.SUCCESS
-
-        # Skip the goal if already done
-        elif self.blackboard.get(self.operation):
-            status = pt.common.Status.SUCCESS
-
-        # Operation matched with the goal and not yet done
-        elif self.operation == self.goal and not self.blackboard.get(self.operation):
-            self.goal.target_pose.header.frame_id = "map"
-            self.goal.target_pose.header.stamp = rospy.Time.now()
-            self.move_base_ac.send_goal(self.goal)
-            self.sent = True
-            status = pt.common.Status.RUNNING
-
-        # Already sent the goal and not yet received the result
-        elif self.sent:
-            self.move_base_ac.wait_for_result()
-            state = self.move_base_ac.get_state()
-
-            if state == GoalStatus.ABORTED or state == GoalStatus.REJECTED:
-                status = pt.common.Status.FAILURE
-            elif state == GoalStatus.PENDING or state == GoalStatus.ACTIVE:
-                status = pt.common.Status.RUNNING
-            elif state == GoalStatus.SUCCEEDED:
-                self.blackboard.set(self.operation, True)
-                status = pt.common.Status.SUCCESS
-            else:
-                status = pt.common.Status.RUNNING
+        elif self.move_base_ac.get_state() == 0 or self.move_base_ac.get_state() == 1:
+            return pt.common.Status.RUNNING 
 
         # Task is successful
         elif self.move_base_ac.get_result():
-            self.blackboard.set(self.operation, True)
-            status = pt.common.Status.SUCCESS
+            self.finished = True
+            return pt.common.Status.SUCCESS
 
-        return status
+        # Failed
+        elif not self.move_base_ac.get_result():
+            return pt.common.Status.FAILURE
+
+        # Already sent the goal and not yet received the result
+        else:
+            return pt.common.Status.RUNNING
 
 class gather_cues(pt.behaviour.Behaviour):
 
@@ -888,6 +823,8 @@ class gather_cues(pt.behaviour.Behaviour):
         self.count_max = count_max
         self.counter = 0
 
+        self.sent_message = False
+
         # become a behaviour
         super(gather_cues, self).__init__("Gather cues")
 
@@ -896,6 +833,9 @@ class gather_cues(pt.behaviour.Behaviour):
         if self.counter == 0:
             rospy.loginfo("Rotating to gather cues!")
         if self.counter >= self.count_max:
+            if not self.sent_message:
+                rospy.loginfo('Cues Gathered')
+                self.sent_message = True
             return pt.common.Status.SUCCESS
         # send the message
         rate = rospy.Rate(10)
@@ -905,3 +845,110 @@ class gather_cues(pt.behaviour.Behaviour):
 
         # tell the tree that you're running
         return pt.common.Status.RUNNING 
+
+class mission_done(pt.behaviour.Behaviour):
+
+    """
+    Checks if mission is done.
+    """
+    def __init__(self):
+        rospy.loginfo("Initialising mission done behaviour.")
+
+        self.task_finished = False
+
+        self.message_sent = False
+
+        # become a behaviour
+        super(mission_done, self).__init__("Mission done?")
+
+    def update(self):
+
+        if self.task_finished:
+            if not self.message_sent:
+                rospy.loginfo('Mission DONE, I will do nothing now!')
+                self.message_sent = True
+            return pt.common.Status.SUCCESS
+        else:
+            return pt.common.Status.FAILURE
+
+class reset_tree_states(pt.behaviour.Behaviour):
+
+    """
+    Resets the tree states such that another iteration can follow.
+    """
+    def __init__(self, kidnap_checker, cancel_goal, update_localization, convergence_checker, send_goal_first, send_goal_kid,
+                            detect_cube, pick_cube, moveto_place, place_cube, cube_detected_ont2, move_head, tuck_arm, resetpose):
+        rospy.loginfo("Initialising reset tree states behaviour.")
+
+        self.kidnap_checker = kidnap_checker  
+        self.cancel_goal = cancel_goal
+        self.update_localization = update_localization
+        self.convergence_checker = convergence_checker
+        self.send_goal_first = send_goal_first
+        self.send_goal_kid = send_goal_kid
+        self.detect_cube = detect_cube
+        self.pick_cube = pick_cube
+        self.moveto_place = moveto_place
+        self.place_cube = place_cube
+        self.cube_detected_ont2 = cube_detected_ont2
+        self.move_head = move_head
+        self.tuck_arm = tuck_arm
+        self.resetpose = resetpose
+
+        # become a behaviour
+        super(reset_tree_states, self).__init__("Reset tree states!")
+
+    def update(self):
+        
+        # Reset kidnap checker
+        self.kidnap_checker.kidnapped = False
+
+        # Reset cancel goal
+        self.cancel_goal.goal_cancelled = False
+
+        # Reset update localization
+        self.convergence_checker.init_localization = False
+
+        # Reset global localization
+        self.update_localization.global_localization_done = False
+
+        # Reset send goal first
+        self.send_goal_first.sent_goal = False
+        self.send_goal_first.finished = False
+
+        # Reset send goal kidnap
+        self.send_goal_kid.sent_goal = False
+        self.send_goal_kid.finished = False
+
+        # reset detect cube
+        self.detect_cube.sent_goal = False
+        self.detect_cube.finished = False
+
+        # Reset pick cube
+        self.pick_cube.tried = False
+        self.pick_cube.done = False
+
+        # Reset navigate to place
+        self.moveto_place.sent_goal = False
+        self.moveto_place.finished = False
+
+        # Reset place cube
+        self.place_cube.tried = False
+        self.place_cube.done = False
+
+        # Reset cube detected on table 2
+        self.cube_detected_ont2.listened = False
+
+        # Reset move head up
+        self.move_head.tried = False
+        self.move_head.done = False
+
+        # Reset tuck arm
+        self.tuck_arm.sent_goal = False
+        self.tuck_arm.finished = False
+
+        # Reset move head up
+        self.resetpose.tried = False
+        self.resetpose.done = False
+
+        return pt.common.Status.FAILURE
